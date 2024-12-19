@@ -23,9 +23,8 @@
 // Wifi cridentials
 const char *SSID = "Haast";
 const char *SSID_PASS = "qwerty00";
-
-// MQTT cridentials
-const char *MQTT_SERVER = "192.168.11.15";
+const int MAX_RETRIES = 5;
+int RETRY_COUNT = 0;
 
 WebServer server(80);
 
@@ -90,7 +89,8 @@ void setup()
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, SSID_PASS);
   Serial.println("");
-  while (WiFi.status() != WL_CONNECTED)
+
+  while (WiFi.status() != WL_CONNECTED && RETRY_COUNT < MAX_RETRIES)
   {
     delay(500);
     Serial.print(".");
@@ -105,92 +105,114 @@ void setup()
     TEMP_LCD.print("Connecting to");
     TEMP_LCD.setCursor(5, 1);
     TEMP_LCD.print("Wifi");
+
+    RETRY_COUNT++;
   }
-  Serial.println("");
-  Serial.print("Connected to ");
-  Serial.println(SSID);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
 
-  DIST_LCD.clear();
-  DIST_LCD.setCursor(6, 0);
-  DIST_LCD.print("Wifi");
-  DIST_LCD.setCursor(3, 1);
-  DIST_LCD.print("Connected");
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.println("");
+    Serial.print("Connected to ");
+    Serial.println(SSID);
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
 
-  TEMP_LCD.clear();
-  TEMP_LCD.setCursor(6, 0);
-  TEMP_LCD.print("Wifi");
-  TEMP_LCD.setCursor(3, 1);
-  TEMP_LCD.print("Connected");
+    DIST_LCD.clear();
+    DIST_LCD.setCursor(6, 0);
+    DIST_LCD.print("Wifi");
+    DIST_LCD.setCursor(3, 1);
+    DIST_LCD.print("Connected");
 
-  server.on("/", []()
-            { server.send(200, "text/plain", "To upload files go to the URL \"<YOUR_IP>/update\""); });
+    TEMP_LCD.clear();
+    TEMP_LCD.setCursor(6, 0);
+    TEMP_LCD.print("Wifi");
+    TEMP_LCD.setCursor(3, 1);
+    TEMP_LCD.print("Connected");
 
-  ElegantOTA.begin(&server);
-  server.begin();
-  Serial.println("HTTP server started\n=================");
+    server.on("/", []()
+              { server.send(200, "text/plain", "To upload files go to the URL \"<YOUR_IP>/update\""); });
 
-  pinMode(PB_RESET_PIN, INPUT_PULLUP);
-  pinMode(RED_LED_PIN, OUTPUT);
-  pinMode(BLUE_LED_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(XSHUT1, OUTPUT);
-  pinMode(XSHUT2, OUTPUT);
-  pinMode(XSHUT3, OUTPUT);
+    ElegantOTA.begin(&server);
+    server.begin();
+    Serial.println("HTTP server started\n=================");
 
-  // Matikan semua sensor VL53L0X
-  digitalWrite(XSHUT1, LOW);
-  digitalWrite(XSHUT2, LOW);
-  digitalWrite(XSHUT3, LOW);
-  delay(5000); // Waktu tunggu untuk memastikan sensor benar-benar mati
+    pinMode(PB_RESET_PIN, INPUT_PULLUP);
+    pinMode(RED_LED_PIN, OUTPUT);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
+    pinMode(XSHUT1, OUTPUT);
+    pinMode(XSHUT2, OUTPUT);
+    pinMode(XSHUT3, OUTPUT);
 
-  // Inisialisasi sensor 'ROLL1'
-  Serial.println("Mengaktifkan Sensor 1...");
-  digitalWrite(XSHUT1, HIGH);
-  delay(100);
-  if (!ROLL1.begin(0x30))
-  { // Set alamat ke 0x30
-    Serial.println("Sensor 1 gagal diinisialisasi!");
-    while (1)
-      ;
+    // Matikan semua sensor VL53L0X
+    digitalWrite(XSHUT1, LOW);
+    digitalWrite(XSHUT2, LOW);
+    digitalWrite(XSHUT3, LOW);
+    delay(5000); // Waktu tunggu untuk memastikan sensor benar-benar mati
+
+    // Inisialisasi sensor 'ROLL1'
+    Serial.println("Mengaktifkan Sensor 1...");
+    digitalWrite(XSHUT1, HIGH);
+    delay(100);
+    if (!ROLL1.begin(0x30))
+    { // Set alamat ke 0x30
+      Serial.println("Sensor 1 gagal diinisialisasi!");
+      while (1)
+        ;
+    }
+    Serial.println("Sensor 1 berhasil diinisialisasi dengan alamat 0x30.");
+
+    // Inisialisasi sensor 'ROLL2'
+    Serial.println("Mengaktifkan Sensor 2...");
+    digitalWrite(XSHUT2, HIGH);
+    delay(100);
+    if (!ROLL2.begin(0x31))
+    { // Set alamat ke 0x31
+      Serial.println("Sensor 2 gagal diinisialisasi!");
+      while (1)
+        ;
+    }
+    Serial.println("Sensor 2 berhasil diinisialisasi dengan alamat 0x31.");
+
+    // Inisialisasi sensor 'ROLL3'
+    Serial.println("Mengaktifkan Sensor 3...");
+    digitalWrite(XSHUT3, HIGH);
+    delay(100);
+    if (!ROLL3.begin(0x32))
+    { // Set alamat ke 0x32
+      Serial.println("Sensor 3 gagal diinisialisasi!");
+      while (1)
+        ;
+    }
+    Serial.println("Sensor 3 berhasil diinisialisasi dengan alamat 0x32.");
+
+    Serial.println("Semua sensor berhasil diinisialisasi!");
+
+    // Inisialisasi EEPROM
+    EEPROM.begin(512);
+    int TEMP_STATUS = EEPROM.read(EEPROM_TEMP_STATUS_ADDRESS);
+    int DIST_STATUS = EEPROM.read(EEPROM_DIST_STATUS_ADDRESS);
+
+    Wire.begin();
+
+    sensors.begin();
   }
-  Serial.println("Sensor 1 berhasil diinisialisasi dengan alamat 0x30.");
+  else
+  {
+    Serial.print("Connection failed");
 
-  // Inisialisasi sensor 'ROLL2'
-  Serial.println("Mengaktifkan Sensor 2...");
-  digitalWrite(XSHUT2, HIGH);
-  delay(100);
-  if (!ROLL2.begin(0x31))
-  { // Set alamat ke 0x31
-    Serial.println("Sensor 2 gagal diinisialisasi!");
-    while (1)
-      ;
+    DIST_LCD.clear();
+    DIST_LCD.setCursor(4, 0);
+    DIST_LCD.print("Connection");
+    DIST_LCD.setCursor(4, 1);
+    DIST_LCD.print("Failed");
+
+    TEMP_LCD.clear();
+    TEMP_LCD.setCursor(4, 0);
+    TEMP_LCD.print("Connection");
+    TEMP_LCD.setCursor(4, 1);
+    TEMP_LCD.print("Failed");
   }
-  Serial.println("Sensor 2 berhasil diinisialisasi dengan alamat 0x31.");
-
-  // Inisialisasi sensor 'ROLL3'
-  Serial.println("Mengaktifkan Sensor 3...");
-  digitalWrite(XSHUT3, HIGH);
-  delay(100);
-  if (!ROLL3.begin(0x32))
-  { // Set alamat ke 0x32
-    Serial.println("Sensor 3 gagal diinisialisasi!");
-    while (1)
-      ;
-  }
-  Serial.println("Sensor 3 berhasil diinisialisasi dengan alamat 0x32.");
-
-  Serial.println("Semua sensor berhasil diinisialisasi!");
-
-  // Inisialisasi EEPROM
-  EEPROM.begin(512);
-  int TEMP_STATUS = EEPROM.read(EEPROM_TEMP_STATUS_ADDRESS);
-  int DIST_STATUS = EEPROM.read(EEPROM_DIST_STATUS_ADDRESS);
-
-  Wire.begin();
-
-  sensors.begin();
 }
 
 void loop()
