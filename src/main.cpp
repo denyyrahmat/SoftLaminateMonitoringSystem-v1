@@ -1,10 +1,10 @@
 /*
- * PERINGATAN!!!!!
- * JANGAN LUPA UNTUK TETAP MEMASUKKAN PROGRAM DARI "ElegantOTA"
- * AGAR DAPAT UPLOAD PROGRAM SECARA WIRELESS!!!!!
- *
+* PERINGATAN!!!!!
+* JANGAN LUPA UNTUK TETAP MEMASUKKAN PROGRAM DARI "ElegantOTA"
+* AGAR DAPAT UPLOAD PROGRAM SECARA WIRELESS!!!!!
+*
 // * UNTUK UPLOAD FILE MASUK KE LAMAN "http://<IP_ADDRESS>/update"
- */
+*/
 
 #include <Arduino.h>
 #include <OneWire.h>
@@ -19,12 +19,29 @@
 #include <WebServer.h>
 #include <ElegantOTA.h>
 #include <PubSubClient.h>
+#include <ArduinoOTA.h>
+#include <ArduinoJson.h>
 
 // Wifi cridentials
-const char *SSID = "Haast";
-const char *SSID_PASS = "qwerty00";
-const int MAX_RETRIES = 5;
+const char *SSID = "Yemi_STARLINK";
+const char *SSID_PASS = "1S@mpai9";
+const int MAX_RETRIES = 10;
 int RETRY_COUNT = 0;
+
+// MQTT cridentials
+const char *MQTT_SERVER = "192.168.1.22";
+const int MQTT_PORT = 1883;
+const char *MQTT_CLIENT_ID = "ESP32Client";
+const char *MQTT_TOPIC = "iot/sensor";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// const char *ROLL_TEMP_TOPIC = "sensor/rollTemp";
+// const char *DRY_ZONE_TOPIC = "sensor/dryZoneTemp";
+// const char *ROLL1_DIST_TOPIC = "sensor/roll1Dist";
+// const char *ROLL2_DIST_TOPIC = "sensor/roll2Dist";
+// const char *ROLL3_DIST_TOPIC = "sensor/roll3Dist";
 
 WebServer server(80);
 
@@ -43,7 +60,8 @@ const int XSHUT1 = 32;
 const int XSHUT2 = 25;
 const int XSHUT3 = 26;
 
-float ROLL1_DIST, ROLL2_DIST, ROLL3_DIST;
+float DRY_ZONE_TEMP, ROLL_TEMP;
+int ROLL1_DIST, ROLL2_DIST, ROLL3_DIST;
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
@@ -74,18 +92,8 @@ int EEPROM_DIST_STATUS_ADDRESS = 1;
 void saveEEPROMStatus(int status, int address);
 void playErrorTone();
 
-void setup()
+void setup_wifi()
 {
-  DIST_LCD.init();
-  DIST_LCD.backlight();
-  TEMP_LCD.init();
-  TEMP_LCD.backlight();
-
-  delay(1000);
-
-  Serial.begin(115200);
-
-  // Wifi and OTA setup
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, SSID_PASS);
   Serial.println("");
@@ -108,6 +116,39 @@ void setup()
 
     RETRY_COUNT++;
   }
+}
+
+void reconnectMQTT()
+{
+  while (!client.connected())
+  {
+    Serial.print("Connecting to MQTT server...");
+    if (client.connect(MQTT_CLIENT_ID))
+    {
+      Serial.println("Connected to MQTT server");
+    }
+    else
+    {
+      Serial.print("Failed to connect to MQTT server, rc=");
+      Serial.print(client.state());
+      Serial.println("\nRetrying in 5 seconds...");
+      delay(5000);
+    }
+  }
+}
+
+void setup()
+{
+  DIST_LCD.init();
+  DIST_LCD.backlight();
+  TEMP_LCD.init();
+  TEMP_LCD.backlight();
+
+  delay(500);
+
+  Serial.begin(115200);
+
+  setup_wifi();
 
   if (WiFi.status() == WL_CONNECTED)
   {
@@ -128,6 +169,9 @@ void setup()
     TEMP_LCD.print("Wifi");
     TEMP_LCD.setCursor(3, 1);
     TEMP_LCD.print("Connected");
+
+    // Connect to MQTT broker
+    client.setServer(MQTT_SERVER, MQTT_PORT);
 
     server.on("/", []()
               { server.send(200, "text/plain", "To upload files go to the URL \"<YOUR_IP>/update\""); });
@@ -199,7 +243,7 @@ void setup()
   }
   else
   {
-    Serial.print("Connection failed");
+    Serial.print("\nConnection failed");
 
     DIST_LCD.clear();
     DIST_LCD.setCursor(4, 0);
@@ -212,11 +256,20 @@ void setup()
     TEMP_LCD.print("Connection");
     TEMP_LCD.setCursor(4, 1);
     TEMP_LCD.print("Failed");
+
+    ESP.restart();
   }
 }
 
 void loop()
 {
+
+  if (!client.connected())
+  {
+    reconnectMQTT();
+  }
+  client.loop();
+
   unsigned long CURRENT_MILLIS = millis();
 
   VL53L0X_RangingMeasurementData_t measure;
@@ -242,8 +295,8 @@ void loop()
     PREVIOUS_TEMP_MILLIS = CURRENT_MILLIS;
 
     sensors.requestTemperatures();
-    float DRY_ZONE_TEMP = sensors.getTempC(DRY_ZONE_SENSOR);
-    float ROLL_TEMP = sensors.getTempC(ROLL_SENSOR);
+    DRY_ZONE_TEMP = sensors.getTempC(DRY_ZONE_SENSOR);
+    ROLL_TEMP = sensors.getTempC(ROLL_SENSOR);
 
     bool TEMP_READ_SUCCESS = (DRY_ZONE_TEMP != DEVICE_DISCONNECTED_C && ROLL_TEMP != DEVICE_DISCONNECTED_C);
     // bool TEMP_READ_SUCCESS = (ROLL_TEMP != DEVICE_DISCONNECTED_C);
@@ -293,7 +346,7 @@ void loop()
     Serial.print("ROLL 1: ");
     if (measure.RangeStatus != 4)
     { // Status 4 berarti tidak ada objek yang terdeteksi
-      ROLL1_DIST = measure.RangeMilliMeter;
+      ROLL1_DIST = measure.RangeMilliMeter - 50;
       Serial.print(ROLL1_DIST);
       Serial.println(" mm");
     }
@@ -381,7 +434,10 @@ void loop()
 
   // Kontrol LED BIRU
   if (allSensorsSuccess)
-  { // Hanya nyalakan LED BIRU jika semua sensor berhasil
+  {
+    // digitalWrite(BLUE_LED_PIN, HIGH); // Nyalakan LED BIRU jika semua sensor berhasil
+
+    // Hanya nyalakan LED BIRU jika semua sensor berhasil
     if (CURRENT_MILLIS - PREVIOUS_MILLIS >= BLINK_INTERVAL)
     {
       PREVIOUS_MILLIS = CURRENT_MILLIS;
@@ -396,6 +452,25 @@ void loop()
   // OTA handle
   server.handleClient();
   ElegantOTA.loop();
+
+  // JSON object
+  StaticJsonDocument<512> jsonDoc;
+  jsonDoc["rollTemp"] = ROLL_TEMP;
+  jsonDoc["dryZoneTemp"] = DRY_ZONE_TEMP;
+  jsonDoc["roll1Dist"] = ROLL1_DIST;
+  jsonDoc["roll2Dist"] = ROLL2_DIST;
+  jsonDoc["roll3Dist"] = ROLL3_DIST;
+
+  // JSON to string conversion
+  char jsonBuffer[512];
+  serializeJson(jsonDoc, jsonBuffer);
+
+  // Publish JSON to MQTT
+  client.publish(MQTT_TOPIC, jsonBuffer);
+  Serial.println("Data published to MQTT");
+  Serial.println(jsonBuffer);
+
+  delay(2000);
 }
 
 void saveEEPROMStatus(int status, int address)
